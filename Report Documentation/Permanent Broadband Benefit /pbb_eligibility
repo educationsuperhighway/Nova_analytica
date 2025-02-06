@@ -1,0 +1,58 @@
+--Query to estimate eligibility numbers for a potential Permanent Broadband Benefit (PBB)
+--This query focuses on the unconnected and 'subscription vulnerable', who we define
+--as households with incomes below $50K.
+
+--the eligibility code block specifies PBB eligibiltiy criteria. Change the povpop
+--variable to adjust the FPL level (listed at 200 now)
+
+
+WITH df as (
+	SELECT 
+		--identifying info
+		hh.state_id, hh.puma20_id, hh.serialno,
+		-- eligibility
+		MAX(
+			CASE WHEN (pop.hins4::text = '1'::text OR 
+									hh.fs::text = '1'::text OR
+									pop.pap > 0::numeric OR
+									pop.ssip > 0::numeric OR 
+                                    -- adjust FPL below
+									pop.povpip <= 200::numeric) 
+			THEN 1
+			ELSE 0 END) as pbb_eligible,
+		--unconnected
+		MAX(
+			CASE WHEN  hh.accessinet::text = '3'::text OR
+						(hh.accessinet::text = '1'::text AND 
+						 hh.hispeed::text = '2'::text AND 
+						 hh.othsvcex::text = '2'::text AND 
+						 (hh.dialup::text = '2'::text OR hh.dialup::text = '1'::text) AND 
+						 hh.satellite::text = '2'::text) 
+			THEN 1
+			ELSE 0 END) AS unconnected,
+		--subscription vulnerable
+		MAX(
+			CASE WHEN hh.hincp > 0::numeric AND hh.hincp <= 50000::numeric
+			THEN 1
+			ELSE 0 END) AS subscription_vulnerable,
+		MAX(hh.wgtp) as hh_weight
+		FROM dl.pums_households_2022 hh
+		LEFT JOIN dl.pums_population_2022 pop ON hh.puma20_id::text = pop.puma20_id::text AND hh.serialno::text = pop.serialno::text
+		GROUP BY hh.state_id, hh.serialno, hh.puma20_id, 
+		hh.accessinet, hh.hispeed, hh.othsvcex, hh.dialup, hh.satellite
+)		
+SELECT
+SUM(CASE WHEN pbb_eligible = 1
+	THEN hh_weight
+	ELSE 0 END) AS hh_eligible, 
+SUM(CASE WHEN pbb_eligible = 1 AND (unconnected = 1 OR subscription_vulnerable = 1)
+	THEN hh_weight
+	ELSE 0 END) AS hh_eligible_unconnected_or_SV,
+SUM(CASE WHEN pbb_eligible = 1 AND unconnected = 1
+	THEN hh_weight
+	ELSE 0 END) AS hh_eligible_unconnected,
+SUM(CASE WHEN pbb_eligible = 1 AND subscription_vulnerable = 1
+	THEN hh_weight
+	ELSE 0 END) AS hh_eligible_SV
+	
+FROM df
